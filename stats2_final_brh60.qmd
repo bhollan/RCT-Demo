@@ -1,0 +1,406 @@
+---
+title: "stats2_final_brh60"
+author: "Brian Holland"
+format: html
+editor: visual
+---
+
+## Final Project (RCT)
+
+```{r, include=FALSE, echo=FALSE}
+library(fBasics)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+library(datasets)
+library(haven)
+library(xtable)
+library(knitr)
+library(car)
+library(ggplot2)
+library(ivreg)
+library(statar)
+library(broom)
+library(data.table) ## For some minor data wrangling
+library(fixest)     ## NB: Requires version >=0.9.0
+library(tidyverse)
+library(plm)
+library(miceadds)
+library(lmtest)
+library(lfe)
+library(multiwayvcov)
+library(stargazer)
+library(miceadds)
+library(dplyr)
+```
+
+```{r, include=FALSE}
+data <- read.csv("final_data_rct.csv")
+clean <- drop_na(data)
+head(data)
+str(data)
+```
+
+A Randomized Controlled Trial (RCT) is the most formalized and rigorous form of hypothesis testing. It centers around designing an experiment where as much as practical is either held constant, allowed to vary wildly as naturally as possible, or determined by the flip of a coin (or roll of the dice, or what have you). This one specific aspect is excruciatingly managed through randomness, usually to route subjects into one of two groups: treatment, or control. The control group would be allowed to vary normally, just how it would vary in normal life. The treatment group would also have the same freedom, but with one "secret ingredient" added. Then all the results from both groups would be monitored and then the outcomes compared.
+
+In this specific example (seed offerings), the seeds are meant to be more robust in a changing climate, but also should not negatively impact the earnings of farmers. It seems from the wording that the seeds were available to all, but specifically offered to the treatment group. This "intent to treat" would be considered the offering itself, and those that "accepted" the offer and used the seeds would be considered having a "treatment on the treated" effect. For the seeds, it would obviously be wonderful if using them made farmers more money, acceptable if it had no effect on earnings, and not a viable product if it had a negative impact on earnings. This experiment design sounds like it is also set up to measure a little bit of promotional mentality and marketability (will offering the new seeds increase use). We can also measure if merely being offered the seeds (not just the use of the new seeds) has any impact.
+
+Causality claims cannot be proven, but they can be disproven. So we will make some attempts to disprove causality if we see a correlation.
+
+What follows is a look at the given "new seeds" example in detail.
+
+The columns in the data:
+
+```         
+• person_id      = identfiction number for a farmer
+• town_id        = identfiction number for the town the farmer lives in
+• town_group     = town group assignment (group 0, 1, 2, or 3)
+• treatment      = indicator variable equal to 1 for treatment, 0 for control
+• uses_new_seeds = indicator variable equal to 1 if the farmer used the new seeds
+• hhld_size      = individual’s household size
+• age_head_hhld  = individual’s age
+• married        = individual’s marital status
+• lnearnings     = log of household earnings
+```
+
+Let's take a look and see what RCT-based concepts map onto the variables in our dataset directly:
+
+```         
+MAPPING:
+• lnearnings     = outcome
+• town_group     = cluster
+• treatment      = itt
+• uses_new_seeds = tot
+
+UNMAPPED:
+• person_id      = identfiction number for a farmer
+• town_id        = identfiction number for the town the farmer lives in
+• hhld_size      = individual’s household size
+• age_head_hhld  = individual’s age
+• married        = individual’s marital status
+```
+
+The treatment groups in our data were also metered out according to a gradient schema:
+
+::: border
+Group and treatment percentage:
+
+0: none
+
+1: 25%
+
+2: 50%
+
+3: 75%
+:::
+
+Let's start by confirming what we were given about groups and treatment rates.
+
+```{r, echo=FALSE}
+# Cluster treatment rates
+data %>%
+  group_by(town_group) %>%
+  summarise(treatment_mean = mean(treatment))
+
+# # Create attrition column and investigate
+data <- data %>%
+  mutate(attritted = if_else(is.na(lnearnings), 1, 0))
+```
+
+So we can see that the treatment rates within each group are as described. Now let's check check how the "treatment" of offering the seeds relates to actual seed usage!
+
+```{r, echo=FALSE}
+
+# ITT and TOT combos
+data %>% 
+  group_by(treatment, uses_new_seeds) %>%
+  tally()
+```
+
+This looks pretty encouraging. Here we can see that no one was offered the seeds and refused (at least no one that didn't attrit anyway). Next, we'll look at attrition and if we can see any relationship between attrition and treatment.
+
+```{r, echo=FALSE}
+# Check attrition's significance related to treatment
+attr <- lm(attritted ~ treatment, data=data)
+stargazer(attr, type='text')
+```
+
+It looks like there was about a 2% higher likelihood of attritting from the treatment group than the control (with high statistical significance). But I think even though it's statistically significant, we can ignore it initially. Missing values (attrition) and dealing with them can be a tricky part of processing an RCT. But there are ways to deal with it if needed (trimming).
+
+Now we're ready to do a preliminary estimate of the impact of new seed use on earnings. We'll do one for the `treatment` variable and one based on if the subject used the seeds (`uses_new_seeds`). And then one without and then with controls for other factors.
+
+```{r, echo=FALSE, warning=FALSE}
+# preliminary
+prelim <- lm(lnearnings ~ treatment, data=data)
+stargazer(prelim, type='text')
+```
+
+These look promising! Let's see what it looks like when we add in control variables from the other columns in the data.
+
+```{r, echo=FALSE, warning=FALSE}
+# adding in controls
+controlled <- lm(lnearnings ~ treatment + 
+                              hhld_size +
+                              age_head_hhld +
+                              married,
+                 data=data)
+stargazer(controlled, type='text')
+```
+
+So here we see that earnings correlates with treatment, but also a good bit with household size and marital status.
+
+```{r, echo=FALSE, warning=FALSE}
+# preliminary
+seeds <- lm(lnearnings ~ uses_new_seeds, data=data)
+stargazer(seeds, type='text')
+```
+
+Wow, new seed use, regardless of treatment status, has a very strong link to earnings without a doubt.
+
+```{r, echo=FALSE, warning=FALSE}
+# adding in controls 
+seeds_contr <- lm(lnearnings ~ uses_new_seeds + 
+                              hhld_size +
+                              age_head_hhld +
+                              married,
+                 data=data)
+stargazer(seeds_contr, type='text')
+```
+
+This mirrors what we saw above regarding household size and marital status. Let's peek at it visually in a histogram.
+
+```{r, echo=FALSE, warning=FALSE}
+me <- data %>% 
+  group_by(treatment) %>%
+  summarise(m = mean(lnearnings, na.rm=T))
+
+mc <- as.numeric(me[1,2])
+mt <- as.numeric(me[2,2])
+
+# Histogram comparison
+ggplot(data, aes(x = lnearnings, fill = factor(treatment))) +
+  geom_histogram(alpha = 0.2, bins = 50) +
+  geom_vline(aes(xintercept = mt, colour='red')) +
+  geom_vline(aes(xintercept = mc, colour='blue')) +
+  guides(colour = "none") +
+  labs(
+    x='Earnings (log($))',
+    y='Count',
+    title='Earnings histogram (line: mean of earnings)'
+  )
+```
+
+This is quite a substantial increase in earnings, merely from being offered new seeds. Let's compare this to a contrast of subjects who merely *used* the seeds vs those who did not.
+
+```{r, echo=FALSE, warning=FALSE}
+use <- data %>% 
+  group_by(uses_new_seeds) %>%
+  summarise(m = mean(lnearnings))
+
+yes <- as.numeric(use[1,2])
+no  <- as.numeric(use[2,2])
+
+# Histogram comparison
+ggplot(data, aes(x = lnearnings, fill = factor(uses_new_seeds))) +
+  geom_histogram(alpha = 0.2, bins = 50) +
+  geom_vline(aes(xintercept = no, colour='red')) +
+  geom_vline(aes(xintercept = yes, colour='blue')) +
+  guides(colour = "none")+
+  labs(
+    x='Earnings (log($))',
+    y='Count',
+    title='Earnings histogram (line: mean of earnings)'
+  )
+```
+
+This shows an even *larger* impact on earnings! The mean earnings of all who used the seeds was well-above that of those who did not.
+
+Before we go on, let's see what we can find by exploring the relationship of earnings with household size and marital status. These two variables could be explaining the increase in earnings (for example, if somehow only married farmers used the new seeds or only large families did).
+
+```{r, echo=FALSE, warning=FALSE}
+# plot/correlate/tally? marital status
+
+married <- data %>%
+  group_by(treatment, married) %>%
+  tally()
+married
+```
+
+So this seems like there's a fair distribution of marital status across treatment, let's confirm the same about household size.
+
+```{r, echo=FALSE, warning=FALSE}
+
+house <- data %>%
+  group_by(treatment, hhld_size) %>%
+  tally()
+house
+```
+
+Other than the huge spike in the control group where household size is `4`, that seems pretty acceptable as far as balance.
+
+Next, let's look at this graphically.
+
+```{r, echo=FALSE, warning=FALSE}
+houses_earn <- data %>%
+  group_by(treatment, hhld_size) %>%
+  summarise(house_earnings = mean(lnearnings, na.rm=T), .groups='drop')
+
+ggplot(houses_earn, aes(x=hhld_size, y=house_earnings, color=factor(treatment))) +
+  geom_point() +
+  geom_smooth(method='lm', formula='y~x') +
+  labs(
+    x='Number in household',
+    y='Household earnings',
+    title='Earnings as a function of household size'
+  )
+
+```
+
+This looks *alarmingly linear*. So much so that it almost as though the data were programmatically generated. Not just the linearity of each, but the remarkable exactness to which they are parallel. Given how anomalously plentiful households of size four were, I would expect there to be at least some variation at that value. (But I think we can wave a magic wand and ignore this in this *particular* setting for now)
+
+Let's just take a peek and see if seed use shares a similar trend.
+
+```{r, echo=FALSE, warning=FALSE}
+planters_earn <- data %>%
+  drop_na() %>%
+  group_by(uses_new_seeds, hhld_size) %>%
+  summarise(house_earnings = mean(lnearnings, na.rm=T), .groups='drop')
+
+ggplot(planters_earn, aes(x=hhld_size, y=house_earnings, color=factor(uses_new_seeds))) +
+  geom_point() +
+  geom_smooth(method='lm', formula='y~x') +
+  labs(
+    x='Number in household',
+    y='Household earnings',
+    title='Earnings as a function of household size'
+  )
+```
+
+Yes, this also looks alarmingly linear, but again, we will wave our hands to this to excuse the obvious. Let's also just glance at the same relationship around marital status.
+
+```{r, echo=FALSE, warning=FALSE}
+boo <- data %>%
+  group_by(treatment, married) %>%
+  summarise(mean_earns = mean(lnearnings, na.rm=T))
+
+ggplot(boo, aes(x=factor(married), y=mean_earns, color=factor(treatment))) +
+  geom_point() +
+  labs(
+    x='Marital status',
+    y='Earnings (average)',
+    title='Earnings as relates to marital status'
+  )
+```
+
+Again, this looks suspiciously linear. Let's compare the treatment/control gap for singles to the same gap for married couples.
+
+```{r, echo=FALSE, warning=FALSE}
+boo <- data %>%
+  group_by(treatment, married) %>%
+  summarise(mean_earns = mean(lnearnings, na.rm=T), .groups='drop')
+(boo$mean_earns[3] - boo$mean_earns[1]) - (boo$mean_earns[4] - boo$mean_earns[2])
+```
+
+Okay, so this isn't *perfectly* matched, but it is indeed suspicious that our data are quite *that* tightly coupled.
+
+Getting back to the heart of the study: the relationship between treatment and earnings. Let's take a look at seed use through the population.
+
+```{r, echo=FALSE}
+# compare seed use rate in treatment vs control
+data %>%
+  group_by(treatment, town_group) %>%
+  summarise(seed_rate = mean(uses_new_seeds, na.rm=T), .groups="drop")
+```
+
+This shows that seed use was at about 20% already in the pure control group and treatment subjects exclusively used the new seeds (dismissing attrition). Additionally, seed use increased linearly with the treatment gradient.
+
+Let's graphically compare the earnings of the treatment and control groups, first as a bar chart, then in a table.
+
+```{r, echo=FALSE}
+# filter to control
+cont <- clean %>%
+  group_by(treatment, town_group) %>%
+  summarize(grp_avg = mean(lnearnings), .groups="drop")
+
+ggplot(cont, aes(x=town_group, y=grp_avg, fill=factor(treatment))) +
+  geom_bar(stat="identity",
+           width=0.4,
+           position=position_dodge(width=0.5)) +
+  labs(
+    x='Town group id',
+    y='Earnings (average)',
+    title='Earnings for treatment per town contrast with control'
+  )
+
+cont
+```
+
+That looks pretty good! We can clearly see the immediate jump of people using seeds, and the spillover effects of the control group within each cluster.
+
+Before we get too excited, we want to make sure our data passes a few tough challenge. We have to make sure that we didn't just "stumble" on a good finding with coincidental subjects and results. So what we'll do is randomly select data to be processed "as though it were treatment" data, and check for the same coefficient we found in the real data.
+
+```{r, echo=FALSE, warning=FALSE}
+
+# permutation test
+
+study <- lm(lnearnings ~ treatment, data=data)
+observed <- coef(study)[2]
+
+n_perm <- 1000
+
+treat <- data$treatment
+treat_base <- rep(NA, n_perm)
+
+for (i in 1:n_perm){
+  treat_p <- sample(treat)
+  regr_p <- lm(lnearnings ~ treat_p, data=data)
+  treat_base[i] <- coef(regr_p)[2]
+}
+
+p_value <- sum(treat_base > observed) / n_perm
+
+perm <- as.data.frame(treat_base)
+colnames(perm) <- "Effect"
+
+ggplot(perm, aes(x=Effect)) +
+  geom_histogram(binwidth=0.005,
+                 color='black',
+                 fill='gray') +
+  geom_vline(xintercept=observed,
+             color='red',
+             linetype='dashed') +
+  labs(
+    x='Effect (coefficient)',
+    y='Count',
+    title='Effect on earnings simulation (red line: real data)'
+  )
+
+```
+
+One last thing we can do is make sure that attrition was random. So let's check how strong the association(s) are between attrition status and any of our controls.
+
+```{r echo=FALSE, warning=FALSE}
+
+attr_cont <- lm(attritted ~  treatment + 
+                              hhld_size +
+                              age_head_hhld +
+                              married,
+                 data=data)
+stargazer(attr_cont, type='text')
+
+```
+
+From this we can see that the only good prediction of attrition is treatment (marriage is statistically significant, but the correlation is too weak to be of import).
+
+However, there is one last thing we need to check with regards to the data. There is a `town_id` variable to identify different towns in the study. We need to check to make sure there were no particular towns that stood out (either in treatment or attrition).
+
+```{r, echo=FALSE}
+
+clust <- felm(attritted ~ treatment | 0 | 0 | town_id, data=data)
+stargazer(clust, type='text')
+
+```
+
+This looks again like treatment has a slightly stronger chance than control of being an attritter. However, even though it is statistically significant, it is quite small, the permutation tests showed a significant gap between randomness and our results, and the size and significance of the earnings boost (both in treatment and in seed use) more than make up for it.
+
+In conclusion, we have shown a strong, rigorous correlation between our treatment and increased earnings (and an even stronger payout through use of the new seeds). Reassigning treatment randomly showed insignificant results by comparison. Lastly, attrition could not be attributed to any observable factor documented.
